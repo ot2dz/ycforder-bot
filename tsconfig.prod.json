@@ -22,14 +22,14 @@
     "src/bot/**/*",
     "src/services/**/*",
     "src/lib/logger.ts",
-    "src/lib/utils.ts"
+    "src/lib/utils.ts",
+    "src/lib/registerWhatwgUrlShim.ts"
   ],
   "exclude": [
     "node_modules",
     "dist",
     "src/scripts/**/*",
     "src/google/**/*",
-    "src/lib/registerWhatwgUrlShim.ts",
     "**/*.spec.ts",
     "**/*.test.ts"
   ]

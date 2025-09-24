@@ -1,9 +1,8 @@
 import 'dotenv/config';
-import './lib/registerWhatwgUrlShim.ts';
+import './lib/registerWhatwgUrlShim.js';
 import http from 'node:http'; // <-- ✅ استيراد بالطريقة الصحيحة
 import { Telegraf, Markup, type Context, type NarrowedContext } from 'telegraf';
-import type { CallbackQuery } from 'telegraf/typings/core/types/typegram';
-import { logger } from './lib/logger.ts';
+import { logger } from './lib/logger.js';
 import { L, formatOrderMessage, getMainMenuKeyboard } from './bot/ui.js';
 import { userStates } from './bot/types.js';
 import {
@@ -52,8 +51,8 @@ async function main() {
     }
   });
   
-  const PORT = process.env.PORT || 3000;
-  server.listen(PORT, '0.0.0.0', () => { // استمع على 0.0.0.0 ليكون متوافقاً مع Docker
+  const PORT = Number(process.env.PORT) || 3000;
+  server.listen(PORT, () => { // استمع على الخادم
     logger.info(`Health check server running on port ${PORT}`);
   });
 

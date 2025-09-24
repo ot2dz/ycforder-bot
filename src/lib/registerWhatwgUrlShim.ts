@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const appliedSymbol = Symbol.for('whatwg-url-shim-applied');
-const moduleAny = Module as typeof Module & { [appliedSymbol]?: boolean };
+const moduleAny = Module as any;
 
 if (!moduleAny[appliedSymbol]) {
   const shimPath = resolve(
@@ -11,11 +11,11 @@ if (!moduleAny[appliedSymbol]) {
     '../../packages/whatwg-url-shim/index.js'
   );
 
-  const originalResolveFilename = Module._resolveFilename;
+  const originalResolveFilename = (Module as any)._resolveFilename;
 
-  Module._resolveFilename = function patchedResolveFilename(
+  (Module as any)._resolveFilename = function patchedResolveFilename(
     request: string,
-    parent: NodeModule | undefined,
+    parent: any,
     isMain: boolean,
     options?: { paths?: string[] }
   ) {
@@ -24,7 +24,7 @@ if (!moduleAny[appliedSymbol]) {
     }
 
     return originalResolveFilename.call(this, request, parent, isMain, options);
-  } as typeof Module._resolveFilename;
+  };
 
   moduleAny[appliedSymbol] = true;
 }
