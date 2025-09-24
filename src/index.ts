@@ -40,6 +40,23 @@ async function main() {
   const { Telegraf } = await import('telegraf');
   const bot = new Telegraf(botToken);
 
+  // Add simple HTTP server for health checks
+  const http = require('http');
+  const server = http.createServer((req: any, res: any) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+    } else {
+      res.writeHead(404);
+      res.end('Not Found');
+    }
+  });
+  
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    logger.info(`Health check server running on port ${PORT}`);
+  });
+
   bot.hears(L.newOrder, async (ctx) => {
     if (userStates.has(ctx.from.id)) {
       await ctx.reply('أنت بالفعل في عملية إنشاء طلب. يرجى إكمالها أو إلغاؤها أولاً.');
