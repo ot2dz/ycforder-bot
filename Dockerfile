@@ -1,36 +1,43 @@
-# استخدام Node.js 20 كـ base image
 FROM node:20-alpine
 
-# تعيين مجلد العمل
+# Install curl for health checks
+RUN apk add --no-cache curl
+
 WORKDIR /app
 
-# نسخ ملفات package
+# Copy package files
 COPY package*.json ./
 COPY pnpm-lock.yaml ./
 
-# تثبيت pnpm عالمياً
+# Install pnpm globally
 RUN npm install -g pnpm
 
-# تثبيت التبعيات
+# Install dependencies
 RUN pnpm install
 
-# نسخ بقية الملفات
+# Copy source code
 COPY . .
 
-# بناء المشروع
+# Build the project
 RUN pnpm run build
 
-# إعداد المتغيرات
+# Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# كشف المنفذ
+# Expose port
 EXPOSE 3000
 
-# إنشاء user غير root للأمان
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S botuser -u 1001
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S botuser -u 1001 && \
+    chown -R botuser:nodejs /app
+
 USER botuser
 
-# تشغيل البوت
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+# Start the bot
 CMD ["pnpm", "start"]
