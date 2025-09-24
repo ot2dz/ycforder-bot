@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { v2 as cloudinary } from 'cloudinary';
-import { logger } from '../lib/logger.ts';
+import { logger } from '../lib/logger.js';
 import type { Telegraf } from 'telegraf';
 
 let isCloudinaryConfigured = false;

@@ -1,8 +1,8 @@
-import { logger } from '../lib/logger.ts';
+import { logger } from '../lib/logger.js';
 import type { Telegraf } from 'telegraf';
-import type { OrderState } from '../bot/types.ts';
-import { formatOrderMessage, getChannelControlKeyboard, getStatusDisplayText } from '../bot/ui.ts';
-import { getOrderStatus } from './airtable.ts';
+import type { OrderState } from '../bot/types.js';
+import { formatOrderMessage, getChannelControlKeyboard, getStatusDisplayText } from '../bot/ui.js';
+import { getOrderStatus } from './airtable.js';
 
 /**
  * يرسل تفاصيل الطلب المكتمل إلى القناة المحددة.

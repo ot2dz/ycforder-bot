@@ -1,10 +1,9 @@
 import 'dotenv/config';
-import './lib/registerWhatwgUrlShim.ts';
+// import './lib/registerWhatwgUrlShim.js';
 import { Telegraf, Markup, type Context, type NarrowedContext } from 'telegraf';
-import type { CallbackQuery } from 'telegraf/typings/core/types/typegram';
-import { logger } from './lib/logger.ts';
-import { L, formatOrderMessage, getMainMenuKeyboard } from './bot/ui.ts';
-import { userStates } from './bot/types.ts';
+import { logger } from './lib/logger.js';
+import { L, formatOrderMessage, getMainMenuKeyboard } from './bot/ui.js';
+import { userStates } from './bot/types.js';
 import {
   finalizeMediaGroup,
   handleCancel,
@@ -18,10 +17,10 @@ import {
   promptForStateCommune,
   showReview,
   startWizard
-} from './bot/wizard.ts';
-import { fetchOrderById, fetchAllOrders, updateOrderStatus, getOrderStatus } from './services/airtable.ts';
-import { isUserAuthorized } from './bot/auth.ts';
-import { updateChannelOrderStatus } from './services/telegram.ts';
+} from './bot/wizard.js';
+import { fetchOrderById, fetchAllOrders, updateOrderStatus, getOrderStatus } from './services/airtable.js';
+import { isUserAuthorized } from './bot/auth.js';
+import { updateChannelOrderStatus } from './services/telegram.js';
 
 interface MediaGroupCacheEntry {
   fileIds: string[];
@@ -228,7 +227,7 @@ async function main() {
     const previousStatus = ctx.match[1];
     const orderId = ctx.match[2];
     
-    logger.info({ callbackData: ctx.callbackQuery.data, previousStatus, orderId }, 'Cancel status button clicked');
+    logger.info({ callbackData: (ctx.callbackQuery as any).data, previousStatus, orderId }, 'Cancel status button clicked');
     await ctx.answerCbQuery(`إلغاء حالة الطلب ${orderId}...`);
 
     try {
@@ -288,7 +287,7 @@ async function main() {
     }
   });
 
-  bot.on('callback_query', async (ctx: NarrowedContext<Context, CallbackQuery>) => {
+  bot.on('callback_query', async (ctx: any) => {
     const action = ctx.callbackQuery.data ?? 'unknown';
     const userId = ctx.from?.id;
     const state = userStates.get(userId ?? -1);

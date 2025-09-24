@@ -1,8 +1,8 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { Telegraf } from 'telegraf';
-import { logger } from '../lib/logger.ts';
-import { userStates, type OrderState } from './types.ts';
+import { logger } from '../lib/logger.js';
+import { userStates, type OrderState } from './types.js';
 import {
   L,
   formatReviewMessage,
@@ -12,11 +12,11 @@ import {
   getWizardNavKeyboard,
   getWilayasKeyboard,
   removeKeyboard
-} from './ui.ts';
-import { isValidAmount, isValidPhoneNumber } from './validation.ts';
-import { uploadOrderPhotosToCloudinary } from '../services/cloudinary.ts';
-import { postOrderToChannel } from '../services/telegram.ts';
-import { saveOrderToAirtable, generateOrderId } from '../services/airtable.ts';
+} from './ui.js';
+import { isValidAmount, isValidPhoneNumber } from './validation.js';
+import { uploadOrderPhotosToCloudinary } from '../services/cloudinary.js';
+import { postOrderToChannel } from '../services/telegram.js';
+import { saveOrderToAirtable, generateOrderId } from '../services/airtable.js';
 
 const MAX_PHOTOS = 10;
 type InlineKeyboardMarkup = ReturnType<typeof Markup.inlineKeyboard>;

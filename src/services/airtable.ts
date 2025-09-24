@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import Airtable, { FieldSet, Record } from 'airtable';
-import { logger } from '../lib/logger.ts';
-import type { OrderState } from '../bot/types.ts';
+import { logger } from '../lib/logger.js';
+import type { OrderState } from '../bot/types.js';
 
 // --- تهيئة Airtable ---
 const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME } = process.env;

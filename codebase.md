@@ -1,5 +1,122 @@
 
 
+# File: ./README.md
+
+```
+
+# YCF Order Bot 📦
+
+Telegram bot for order management with Airtable integration and Cloudinary photo storage.
+
+## Features ✨
+
+- 🤖 Telegram bot for order creation
+- 📊 Airtable database integration
+- 🖼️ Cloudinary photo storage
+- 📢 Automatic channel posting
+- 🔄 Real-time status management
+- 🔐 Team-based authorization
+- 📱 Arabic language support
+
+## Setup 🚀
+
+### 1. Environment Variables
+
+Copy `.env.example` to `.env` and fill in your credentials:
+
+```bash
+cp .env.example .env
+```
+
+Required variables:
+- `TELEGRAM_BOT_TOKEN` - Your Telegram bot token
+- `TELEGRAM_CHANNEL_ID` - Channel ID for posting orders
+- `AIRTABLE_API_KEY` - Airtable API key
+- `AIRTABLE_BASE_ID` - Airtable base ID
+- `AIRTABLE_TABLE_NAME` - Table name in Airtable
+- `CLOUDINARY_CLOUD_NAME` - Cloudinary cloud name
+- `CLOUDINARY_API_KEY` - Cloudinary API key
+- `CLOUDINARY_API_SECRET` - Cloudinary API secret
+- `AUTHORIZED_USER_IDS` - Comma-separated user IDs
+
+### 2. Local Development
+
+```bash
+# Install dependencies
+pnpm install
+
+# Start development server
+pnpm run dev
+
+# Build for production
+pnpm run build
+
+# Start production server
+pnpm start
+```
+
+### 3. Deployment on Coolify
+
+1. **Build Pack**: Choose "Nixpacks"
+2. **Repository**: `https://github.com/ot2dz/ycforder-bot.git`
+3. **Branch**: `main`
+4. **Port**: `3000`
+5. **Environment Variables**: Set all required variables
+6. **Health Check**: `/health`
+
+## Order Status Flow 🔄
+
+- 🔍 قيد التجهيز (Preparing)
+- ✅ تم التجهيز (Prepared)
+- 🚚 تم الإرسال (Shipped)
+- 📦 تم التسليم (Delivered)
+- ❌ تم الإلغاء (Canceled)
+
+## Commands 📝
+
+- `/start` - Start the bot
+- `🆕 طلب جديد` - Create new order
+- `📦 عرض الطلبات` - View orders (authorized users only)
+
+## Tech Stack 💻
+
+- **Runtime**: Node.js 20
+- **Language**: TypeScript
+- **Bot Framework**: Telegraf
+- **Database**: Airtable
+- **File Storage**: Cloudinary
+- **Package Manager**: pnpm
+- **Build Tool**: TypeScript Compiler
+- **Deployment**: Coolify with Nixpacks
+
+## Project Structure 📁
+
+```
+src/
+├── bot/           # Bot logic and handlers
+├── services/      # External service integrations
+├── lib/           # Utilities and helpers
+└── index.ts       # Main application entry point
+```
+
+## Health Check 💚
+
+The bot includes a health check endpoint at `/health` that returns:
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-09-24T..."
+}
+```
+
+## License 📄
+
+ISC License
+```
+
+
+
 # File: ./package.json
 
 ```
@@ -15,7 +132,8 @@
     "start:dev": "tsx src/index.ts",
     "mint-token": "tsx src/scripts/mint-oauth-token.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "postinstall": "pnpm run build"
   },
   "keywords": [
     "telegram",
@@ -27,9 +145,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "airtable": "^0.12.2",
+    "cloudinary": "^2.7.0",
     "dotenv": "^17.2.2",
-    "google-auth-library": "^10.3.0",
-    "googleapis": "^160.0.0",
     "mime-types": "^2.1.35",
     "pino": "^9.11.0",
     "telegraf": "^4.16.3"
@@ -111,12 +229,17 @@ module.exports = {
     "rootDir": "./src",
     "outDir": "./dist",
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "declaration": false,
+    "sourceMap": false,
+    "removeComments": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "**/*.spec.ts", "**/*.test.ts"]
 }
 
 ```
@@ -848,6 +971,7 @@ export function isValidAmount(amount: string): boolean {
 
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
+import type { Telegraf } from 'telegraf';
 import { logger } from '../lib/logger.ts';
 import { userStates, type OrderState } from './types.ts';
 import {
@@ -857,9 +981,13 @@ import {
   getOptionalStepKeyboard,
   getReviewKeyboard,
   getWizardNavKeyboard,
+  getWilayasKeyboard,
   removeKeyboard
 } from './ui.ts';
 import { isValidAmount, isValidPhoneNumber } from './validation.ts';
+import { uploadOrderPhotosToCloudinary } from '../services/cloudinary.ts';
+import { postOrderToChannel } from '../services/telegram.ts';
+import { saveOrderToAirtable, generateOrderId } from '../services/airtable.ts';
 
 const MAX_PHOTOS = 10;
 type InlineKeyboardMarkup = ReturnType<typeof Markup.inlineKeyboard>;
@@ -976,7 +1104,7 @@ export async function promptForPhone(ctx: Context, state: OrderState) {
 
 export async function promptForStateCommune(ctx: Context, state: OrderState) {
   await resetToPromptState(ctx, state);
-  await transitionToStep(ctx, state, 'awaiting_state_commune', L.askStateCommune);
+  await transitionToStep(ctx, state, 'awaiting_state_commune', L.askStateCommune, getWilayasKeyboard());
 }
 
 export async function promptForAddress(ctx: Context, state: OrderState) {
@@ -1038,7 +1166,7 @@ export async function handleCancel(ctx: Context) {
   await ctx.reply(L.orderCanceled, getMainMenuKeyboard());
 }
 
-export async function handleConfirm(ctx: Context, state: OrderState) {
+export async function handleConfirm(bot: Telegraf, ctx: Context, state: OrderState) {
   if (state.step === 'submitting') {
     logger.warn({ userId: ctx.from?.id }, 'Duplicate order confirmation tapped.');
     await ctx.answerCbQuery('الطلب قيد المعالجة بالفعل...');
@@ -1054,7 +1182,36 @@ export async function handleConfirm(ctx: Context, state: OrderState) {
 
   logger.info({ userId: ctx.from?.id, order: { ...state, telegramFileIds: state.telegramFileIds.length } }, 'Submitting order to external services.');
 
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  try {
+    // الخطوة 1: إنشاء معرف طلب بالتسلسل الجديد
+    const orderId = await generateOrderId();
+    
+    // الخطوة 2: ارفع الصور إلى Cloudinary
+    const cloudinaryResults = await uploadOrderPhotosToCloudinary(bot, state.telegramFileIds, orderId);
+    state.cloudinaryPhotoData = cloudinaryResults; // تخزين البيانات للخطوات التالية
+
+    // الخطوة 3: أرسل إلى القناة
+    await postOrderToChannel(bot, state, orderId);
+
+    // الخطوة 4: احفظ في Airtable
+    await saveOrderToAirtable(state, orderId);
+
+  } catch (error) {
+    logger.error({ error, userId: ctx.from?.id }, 'Failed to process order submission.');
+
+    // 1. احذف رسالة "جارِ المعالجة..."
+    await deleteMessageIfPossible(ctx, processingMessage.message_id);
+
+    // 2. أعد الحالة إلى "المراجعة" للسماح بمحاولة أخرى
+    state.step = 'reviewing';
+
+    // 3. أبلغ المستخدم بالخطأ واطلب منه المحاولة مرة أخرى
+    await ctx.reply('⚠️ حدث خطأ أثناء تأكيد الطلب. يرجى مراجعة البيانات والمحاولة مرة أخرى بالضغط على زر التأكيد مجدداً.');
+    
+    // 4. أعد عرض شاشة المراجعة الكاملة (الصور + التفاصيل + الأزرار)
+    await showReview(ctx, state);
+    return;
+  }
 
   await deleteMessageIfPossible(ctx, processingMessage.message_id);
   await ctx.reply(L.orderConfirmed, getMainMenuKeyboard());
@@ -1073,7 +1230,12 @@ export async function handleTextInput(ctx: Context) {
   switch (state.step) {
     case 'awaiting_customer_name':
       state.customerName = text;
-      await promptForPhone(ctx, state);
+      if (state.isEditing) {
+        state.isEditing = false;
+        await showReview(ctx, state);
+      } else {
+        await promptForPhone(ctx, state);
+      }
       break;
     case 'awaiting_phone':
       if (!isValidPhoneNumber(text)) {
@@ -1081,15 +1243,22 @@ export async function handleTextInput(ctx: Context) {
         return;
       }
       state.phone = text;
-      await promptForStateCommune(ctx, state);
+      if (state.isEditing) {
+        state.isEditing = false;
+        await showReview(ctx, state);
+      } else {
+        await promptForStateCommune(ctx, state);
+      }
       break;
-    case 'awaiting_state_commune':
-      state.stateCommune = text;
-      await promptForAddress(ctx, state);
-      break;
+    // تم إزالة حالة 'awaiting_state_commune' من هنا لأنها الآن عبر الأزرار
     case 'awaiting_address':
       state.address = text;
-      await promptForAmount(ctx, state);
+      if (state.isEditing) {
+        state.isEditing = false;
+        await showReview(ctx, state);
+      } else {
+        await promptForAmount(ctx, state);
+      }
       break;
     case 'awaiting_amount_total':
       if (!isValidAmount(text)) {
@@ -1097,11 +1266,19 @@ export async function handleTextInput(ctx: Context) {
         return;
       }
       state.amountTotal = Number(text.replace(/\s+/g, ''));
-      await promptForNotes(ctx, state);
+      if (state.isEditing) {
+        state.isEditing = false;
+        await showReview(ctx, state);
+      } else {
+        await promptForNotes(ctx, state);
+      }
       break;
     case 'awaiting_notes':
       state.notes = text;
-      await showReview(ctx, state);
+      if (state.isEditing) {
+        state.isEditing = false;
+      }
+      await showReview(ctx, state); // دائماً نذهب للمراجعة بعد الملاحظات
       break;
     default:
       break;
@@ -1139,6 +1316,11 @@ export async function finalizeMediaGroup(ctx: Context, mediaFiles: string[]) {
 
 ```
 
+export interface CloudinaryUploadResult {
+  secure_url: string;
+  public_id: string;
+}
+
 export interface OrderState {
   step:
     | 'awaiting_photos'
@@ -1161,6 +1343,8 @@ export interface OrderState {
   notes?: string;
   lastMessageId?: number;
   reviewMediaMessageIds?: number[];
+  isEditing?: boolean; // حقل جديد لتتبع حالة التعديل
+  cloudinaryPhotoData?: CloudinaryUploadResult[]; // لتخزين نتائج الرفع
 }
 
 export const userStates = new Map<number, OrderState>();
@@ -1190,8 +1374,15 @@ export const L = {
   invalidAmount: '⚠️ المبلغ غير صالح. يرجى إدخال أرقام فقط:',
   tooManyPhotos: '⚠️ يُسمح بحد أقصى 10 صور لكل طلب. يرجى إعادة المحاولة.',
   noPhotos: '⚠️ يجب إرسال صورة واحدة على الأقل.',
-  newOrder: '🆕 إنشاء طلب جديد',
-  myOrders: '📦 طلباتي',
+  // الولايات الثابتة
+  stateAinSalah: 'عين صالح',
+  stateTamanrasset: 'تمنراست',
+  stateAoulef: 'أولف',
+  stateAdrar: 'أدرار',
+  stateReggane: 'رقان',
+  // Main Menu
+  newOrder: '🆕 طلب جديد', // اختصار بسيط
+  myOrders: '📦 عرض الطلبات', // <-- التغيير هنا
   help: 'ℹ️ مساعدة',
   back: '⬅️ رجوع',
   cancel: '❌ إلغاء',
@@ -1199,9 +1390,16 @@ export const L = {
   confirm: '✅ تأكيد الطلب',
   editName: '✏️ تعديل الاسم',
   editPhone: '✏️ تعديل الهاتف',
+  editStateCommune: '✏️ تعديل الولاية',
   editAddress: '✏️ تعديل العنوان',
   editAmount: '✏️ تعديل المبلغ',
   editNotes: '✏️ تعديل الملاحظات',
+  // أزرار التحكم في القناة
+  statusPrepared: '✅ تم التجهيز',
+  statusShipped: '🚚 تم الإرسال',
+  statusDelivered: '📦 تم التسليم',
+  statusCanceled: '❌ إلغاء الطلبية',
+
   orderCanceled: 'تم إلغاء الطلب.',
   orderConfirmed: '✅ تم إنشاء الطلب بنجاح!',
   processingOrder: '⏳ جارٍ تأكيد الطلب وتحميل الصور...'
@@ -1228,6 +1426,17 @@ export function getWizardNavKeyboard(): InlineKeyboardMarkup {
   ]);
 }
 
+export function getWilayasKeyboard(): InlineKeyboardMarkup {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback(L.stateAinSalah, 'order:set_wilaya:عين صالح')],
+    [Markup.button.callback(L.stateTamanrasset, 'order:set_wilaya:تمنراست')],
+    [Markup.button.callback(L.stateAoulef, 'order:set_wilaya:أولف')],
+    [Markup.button.callback(L.stateAdrar, 'order:set_wilaya:أدرار')],
+    [Markup.button.callback(L.stateReggane, 'order:set_wilaya:رقان')],
+    [Markup.button.callback(L.cancel, 'order:cancel')] // زر الإلغاء مهم هنا
+  ]);
+}
+
 export function getOptionalStepKeyboard(): InlineKeyboardMarkup {
   return Markup.inlineKeyboard([
     [Markup.button.callback(L.skip, 'order:next')],
@@ -1246,7 +1455,10 @@ export function getReviewKeyboard(): InlineKeyboardMarkup {
       Markup.button.callback(L.editPhone, 'order:edit:phone')
     ],
     [
+      Markup.button.callback(L.editStateCommune, 'order:edit:state_commune'),
       Markup.button.callback(L.editAddress, 'order:edit:address'),
+    ],
+    [
       Markup.button.callback(L.editAmount, 'order:edit:amount')
     ],
     [Markup.button.callback(L.editNotes, 'order:edit:notes')],
@@ -1254,32 +1466,166 @@ export function getReviewKeyboard(): InlineKeyboardMarkup {
   ]);
 }
 
-const markdownEscapeRegex = /([\\_*\[\]()~`>#+=|{}.!-])/g;
+const markdownEscapeRegex = /([\\_*\[\]()~`>#+=|{}!-])/g; // تم حذف النقطة (.) من هنا
 
 export function escapeMarkdown(text?: string): string {
   if (!text) return '';
   return text.replace(markdownEscapeRegex, '\\$1');
 }
 
-export function formatReviewMessage(state: OrderState): string {
-  const amountLabel =
-    state.amountTotal !== undefined
-      ? `${state.amountTotal.toLocaleString('ar-DZ')} د.ج`
-      : '_غير محدد_';
-  const amountText = state.amountTotal !== undefined ? escapeMarkdown(amountLabel) : amountLabel;
+/**
+ * تنسق رسالة تفاصيل الطلب بالتنسيق الجديد المطلوب
+ * @param state بيانات الطلب
+ * @param orderId معرف الطلب (اختياري)
+ * @param isReview هل هذا للمراجعة أم للعرض النهائي
+ * @param status حالة الطلب (اختياري)
+ */
+export function formatOrderMessage(state: OrderState, orderId?: string, isReview: boolean = false, status?: string): string {
+  const title = isReview ? 'يرجى مراجعة تفاصيل الطلب:' : `طلب جديد: ${orderId || 'غير محدد'}`;
+  const separator = '———————————————';
+  
+  const amountLabel = state.amountTotal !== undefined ? 
+    `${state.amountTotal.toLocaleString('ar-DZ', { useGrouping: false })} د.ج` 
+    : 'غير محدد';
+  
+  const photosCount = state.telegramFileIds?.length || state.cloudinaryPhotoData?.length || 0;
+  
+  // إضافة حالة الطلب إذا كانت متوفرة
+  const statusLine = status && !isReview ? 
+    `${separator}\n✨ الحالة: ${getStatusDisplayText(status)}\n` 
+    : '';
+  
   return (
-    '*يرجى مراجعة تفاصيل الطلب:*\n\n' +
-    `👤 *الاسم الكامل:* ${escapeMarkdown(state.customerName)}\n` +
-    `📞 *رقم الهاتف:* ${escapeMarkdown(state.phone)}\n` +
-    `📍 *الولاية/البلدية:* ${escapeMarkdown(state.stateCommune)}\n` +
-    `🏠 *العنوان:* ${escapeMarkdown(state.address) || '_لم يتم تحديده_'}\n` +
-    `💳 *طريقة الدفع:* الدفع عند الاستلام\n` +
-    `💰 *المبلغ الإجمالي:* ${amountText}\n` +
-    `📝 *ملاحظات:* ${escapeMarkdown(state.notes) || '_لا يوجد_'}\n\n` +
-    `🖼️ *الصور:* (${state.telegramFileIds.length} صور مرفقة)`
+    `*${title}*\n` +
+    `${separator}\n` +
+    `👤 الاسم الكامل: ${escapeMarkdown(state.customerName) || 'غير محدد'}\n` +
+    `${separator}\n` +
+    `📞 رقم الهاتف: ${escapeMarkdown(state.phone) || 'غير محدد'}\n` +
+    `${separator}\n` +
+    `📍 الولاية/البلدية: ${escapeMarkdown(state.stateCommune) || 'غير محدد'}\n` +
+    `${separator}\n` +
+    `🏠 العنوان: ${escapeMarkdown(state.address) || 'وسط المدينة'}\n` +
+    `${separator}\n` +
+    `💳 طريقة الدفع: الدفع عند الاستلام\n` +
+    `${separator}\n` +
+    `💰 المبلغ الإجمالي: ${escapeMarkdown(amountLabel)}\n` +
+    `${separator}\n` +
+    `📝 ملاحظات: ${escapeMarkdown(state.notes) || 'لا يوجد'}\n` +
+    `${separator}\n` +
+    statusLine +
+    `\n🖼 الصور: (${photosCount} صور مرفقة)`
   );
 }
 
+/**
+ * تنسق رسالة مراجعة الطلب (للاستخدام في المعالج)
+ */
+export function formatReviewMessage(state: OrderState): string {
+  return formatOrderMessage(state, undefined, true);
+}
+
+/**
+ * يقوم بإنشاء أزرار التحكم بالطلبية التي ستظهر في القناة حسب الحالة
+ * @param orderId المعرف الفريد للطلبية
+ * @param currentStatus حالة الطلب الحالية
+ */
+export function getChannelControlKeyboard(orderId: string, currentStatus: string = 'preparing'): InlineKeyboardMarkup {
+  const buttons = [];
+  
+  // بناء الأزرار حسب الحالة الحالية
+  if (currentStatus === 'preparing') {
+    buttons.push([
+      Markup.button.callback(L.statusPrepared, `status:prepared:${orderId}`),
+      Markup.button.callback(L.statusShipped, `status:shipped:${orderId}`),
+    ]);
+    buttons.push([
+      Markup.button.callback(L.statusDelivered, `status:delivered:${orderId}`),
+      Markup.button.callback(L.statusCanceled, `status:canceled:${orderId}`),
+    ]);
+  } else if (currentStatus === 'prepared') {
+    buttons.push([
+      Markup.button.callback('❌ إلغاء التجهيز', `cancel_status:prepared:${orderId}`),
+      Markup.button.callback(L.statusShipped, `status:shipped:${orderId}`),
+    ]);
+    buttons.push([
+      Markup.button.callback(L.statusDelivered, `status:delivered:${orderId}`),
+      Markup.button.callback(L.statusCanceled, `status:canceled:${orderId}`),
+    ]);
+  } else if (currentStatus === 'shipped') {
+    buttons.push([
+      Markup.button.callback('❌ إلغاء الإرسال', `cancel_status:shipped:${orderId}`),
+      Markup.button.callback(L.statusDelivered, `status:delivered:${orderId}`),
+    ]);
+    buttons.push([
+      Markup.button.callback(L.statusCanceled, `status:canceled:${orderId}`),
+    ]);
+  } else if (currentStatus === 'delivered') {
+    buttons.push([
+      Markup.button.callback('❌ إلغاء التسليم', `cancel_status:delivered:${orderId}`),
+      Markup.button.callback(L.statusCanceled, `status:canceled:${orderId}`),
+    ]);
+  } else if (currentStatus === 'canceled') {
+    buttons.push([
+      Markup.button.callback('🔄 إعادة تفعيل', `status:preparing:${orderId}`),
+    ]);
+  }
+  
+  return Markup.inlineKeyboard(buttons);
+}
+
+/**
+ * يحول حالة الطلب إلى نص عربي مع الرموز التعبيرية
+ */
+export function getStatusDisplayText(status: string): string {
+  switch (status) {
+    case 'preparing': return '🔍 قيد التجهيز';
+    case 'prepared': return '✅ تم التجهيز';
+    case 'shipped': return '🚚 تم الإرسال';
+    case 'delivered': return '📦 تم التسليم';
+    case 'canceled': return '❌ تم الإلغاء';
+    default: return '❓ غير معروف';
+  }
+}
+
+```
+
+
+
+# File: ./src/bot/auth.ts
+
+```
+
+import { logger } from '../lib/logger.ts';
+
+let authorizedIds: Set<string>;
+
+function getAuthorizedIds(): Set<string> {
+    if (authorizedIds) {
+        return authorizedIds;
+    }
+
+    const idsFromEnv = process.env.AUTHORIZED_USER_IDS;
+    if (!idsFromEnv) {
+        logger.warn('AUTHORIZED_USER_IDS is not set in .env. No user will be authorized.');
+        authorizedIds = new Set();
+        return authorizedIds;
+    }
+
+    const idArray = idsFromEnv.split(',').map(id => id.trim());
+    authorizedIds = new Set(idArray);
+    logger.info({ authorized_count: authorizedIds.size }, 'Authorized user IDs loaded.');
+    return authorizedIds;
+}
+
+/**
+ * يتحقق مما إذا كان معرف المستخدم موجوداً في قائمة المصرح لهم.
+ * @param userId معرف مستخدم تيليجرام
+ * @returns true إذا كان المستخدم مصرحاً له.
+ */
+export function isUserAuthorized(userId: number): boolean {
+    const ids = getAuthorizedIds();
+    return ids.has(String(userId));
+}
 ```
 
 
@@ -1290,10 +1636,10 @@ export function formatReviewMessage(state: OrderState): string {
 
 import 'dotenv/config';
 import './lib/registerWhatwgUrlShim.ts';
-import type { Context, NarrowedContext } from 'telegraf';
+import { Telegraf, Markup, type Context, type NarrowedContext } from 'telegraf';
 import type { CallbackQuery } from 'telegraf/typings/core/types/typegram';
 import { logger } from './lib/logger.ts';
-import { L, getMainMenuKeyboard } from './bot/ui.ts';
+import { L, formatOrderMessage, getMainMenuKeyboard } from './bot/ui.ts';
 import { userStates } from './bot/types.ts';
 import {
   finalizeMediaGroup,
@@ -1309,6 +1655,9 @@ import {
   showReview,
   startWizard
 } from './bot/wizard.ts';
+import { fetchOrderById, fetchAllOrders, updateOrderStatus, getOrderStatus } from './services/airtable.ts';
+import { isUserAuthorized } from './bot/auth.ts';
+import { updateChannelOrderStatus } from './services/telegram.ts';
 
 interface MediaGroupCacheEntry {
   fileIds: string[];
@@ -1327,6 +1676,23 @@ async function main() {
   const { Telegraf } = await import('telegraf');
   const bot = new Telegraf(botToken);
 
+  // Add simple HTTP server for health checks
+  const http = require('http');
+  const server = http.createServer((req: any, res: any) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
+    } else {
+      res.writeHead(404);
+      res.end('Not Found');
+    }
+  });
+  
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    logger.info(`Health check server running on port ${PORT}`);
+  });
+
   bot.hears(L.newOrder, async (ctx) => {
     if (userStates.has(ctx.from.id)) {
       await ctx.reply('أنت بالفعل في عملية إنشاء طلب. يرجى إكمالها أو إلغاؤها أولاً.');
@@ -1335,7 +1701,81 @@ async function main() {
     await startWizard(ctx);
   });
 
-  bot.hears(L.myOrders, (ctx) => ctx.reply('هذه الميزة ستتوفر قريباً.'));
+  bot.hears(L.myOrders, async (ctx) => { // الزر الآن اسمه "عرض الطلبات"
+    // الخطوة 1: التحقق من الصلاحيات
+    if (!isUserAuthorized(ctx.from.id)) {
+        await ctx.reply('ليس لديك الصلاحية لعرض الطلبات.');
+        return;
+    }
+
+    try {
+        await ctx.reply('⏳ جارِ البحث عن الطلبات...');
+        const orders = await fetchAllOrders(); // <-- جلب كل الطلبات
+
+        if (orders.length === 0) {
+            await ctx.reply('لا توجد أي طلبيات مسجلة حالياً.');
+            return;
+        }
+
+        await ctx.reply(`لقد وجدت ${orders.length} طلبات:`);
+
+        for (const order of orders) { 
+            try {
+                logger.debug({ order }, 'Processing order summary for display.');
+
+                // --- بناء الملخص بطريقة آمنة ---
+                logger.debug('Step 1: Processing customer name');
+                const name = order.customerName || 'غير متوفر';
+                logger.debug({ name }, 'Customer name processed');
+                
+                logger.debug('Step 2: Processing state commune');
+                const state = order.stateCommune || 'غير متوفر';
+                logger.debug({ state }, 'State commune processed');
+                
+                logger.debug('Step 3: Processing amount');
+                const amount = order.amountTotal ? `${order.amountTotal} د.ج` : 'غير متوفر';
+                logger.debug({ amount }, 'Amount processed');
+                
+                logger.debug('Step 4: Building summary string');
+                const summary = `*الاسم:* ${name} | *البلد:* ${state} | *المبلغ:* ${amount}`;
+                logger.debug({ summary }, 'Summary built successfully');
+                
+                logger.debug('Step 5: Building message string');
+                const message = `*الطلبية رقم:* \`${order.orderId}\`\n------------------\n${summary}\n------------------`;
+                logger.debug({ message }, 'Message built successfully');
+                
+                logger.debug('Step 6: Creating keyboard');
+                const keyboard = Markup.inlineKeyboard([
+                    Markup.button.callback('تفاصيل الطلبية', `details:${order.orderId}`)
+                ]);
+                logger.debug('Keyboard created successfully');
+                
+                logger.debug('Step 7: Sending reply to Telegram');
+                await ctx.reply(message, { ...keyboard, parse_mode: 'Markdown' });
+                logger.debug('Reply sent successfully');
+                // ---------------------------------
+            } catch (error: any) {
+                // هذا الجزء سيخبرنا بالحقيقة
+                logger.error({ 
+                    error: {
+                        message: error?.message || 'Unknown error',
+                        stack: error?.stack || 'No stack trace',
+                        name: error?.name || 'Unknown error type',
+                        toString: error?.toString() || 'Error toString failed'
+                    }, 
+                    problematicOrder: order,
+                    errorType: typeof error,
+                    errorKeys: Object.keys(error || {})
+                }, 'Failed to process and display a single order summary.');
+                // سنستمر في عرض باقي الطلبات بدلاً من التوقف
+                continue;
+            }
+        }
+    } catch (error) {
+        logger.error({ error, userId: ctx.from.id }, 'Failed to fetch all orders.');
+        await ctx.reply('حدث خطأ أثناء جلب الطلبات. يرجى المحاولة مرة أخرى.');
+    }
+  });
   bot.hears(L.help, (ctx) => ctx.reply('لإنشاء طلب جديد، اضغط على زر "🆕 إنشاء طلب جديد" في الأسفل. لإلغاء الطلب أثناء إدخاله، استخدم زر "❌ إلغاء" الموجود أسفل الرسالة.'));
 
   bot.start(async (ctx) => {
@@ -1393,6 +1833,97 @@ async function main() {
 
   bot.on('text', handleTextInput);
 
+  bot.action(/details:(.+)/, async (ctx) => {
+    const orderId = ctx.match[1];
+    await ctx.answerCbQuery(`جلب تفاصيل الطلب ${orderId}...`);
+
+    try {
+        const orderDetails = await fetchOrderById(orderId);
+        if (!orderDetails) {
+            await ctx.reply(`لم أتمكن من العثور على تفاصيل الطلبية رقم: ${orderId}`);
+            return;
+        }
+        
+        // عرض الصور أولاً
+        const mediaGroup = (orderDetails.cloudinaryPhotoData || []).map(photo => ({
+            type: 'photo' as const,
+            media: photo.secure_url,
+        }));
+        if (mediaGroup.length > 0) await ctx.replyWithMediaGroup(mediaGroup as any);
+        
+        // ثم عرض النص بالتنسيق الجديد
+        await ctx.reply(formatOrderMessage(orderDetails as any, orderId, false), { parse_mode: 'Markdown' });
+    } catch (error) {
+        logger.error({ error, orderId }, 'Failed to fetch order details.');
+        await ctx.reply('حدث خطأ أثناء جلب تفاصيل الطلب.');
+    }
+  });
+
+  // معالج أزرار إلغاء الحالات (يجب أن يكون دقيقاً ومحدداً ويأتي أولاً)
+  bot.action(/^cancel_status:(prepared|shipped|delivered):(.+)$/, async (ctx) => {
+    const previousStatus = ctx.match[1];
+    const orderId = ctx.match[2];
+    
+    logger.info({ callbackData: ctx.callbackQuery.data, previousStatus, orderId }, 'Cancel status button clicked');
+    await ctx.answerCbQuery(`إلغاء حالة الطلب ${orderId}...`);
+
+    try {
+        // تحقق من الحالة الحالية
+        const currentStatus = await getOrderStatus(orderId);
+        logger.info({ orderId, currentStatus, expectedStatus: previousStatus }, 'Status validation for cancellation');
+        
+        if (currentStatus !== previousStatus) {
+            logger.warn({ orderId, currentStatus, previousStatus }, 'Current status does not match the status being cancelled');
+            await ctx.answerCbQuery(`⚠️ الطلب ليس في حالة: ${getStatusText(previousStatus)}`);
+            return;
+        }
+        
+        logger.info({ orderId, from: currentStatus, to: 'preparing' }, 'Updating status to preparing');
+        await updateOrderStatus(orderId, 'preparing');
+        
+        // تحديث رسالة القناة بالحالة الجديدة
+        const messageId = ctx.callbackQuery.message?.message_id;
+        await updateChannelOrderStatus(bot, orderId, 'preparing', messageId);
+        
+        logger.info({ orderId, previousStatus }, 'Order status reverted to preparing');
+        await ctx.answerCbQuery(`✅ تم إلغاء حالة: ${getStatusText(previousStatus)}`);
+    } catch (error) {
+        logger.error({ error, orderId, previousStatus }, 'Failed to revert order status');
+        await ctx.answerCbQuery('❌ حدث خطأ أثناء إلغاء حالة الطلب');
+    }
+  });
+
+  // معالج أزرار تغيير حالة الطلبات في القناة (يجب أن يكون دقيقاً لتجنب تضارب مع cancel_status)
+  bot.action(/^status:(prepared|shipped|delivered|canceled|preparing):(.+)$/, async (ctx) => {
+    const newStatus = ctx.match[1];
+    const orderId = ctx.match[2];
+    
+    await ctx.answerCbQuery(`تحديث حالة الطلب ${orderId}...`);
+
+    try {
+        // أولاً تحقق من الحالة الحالية لتجنب التحديثات المكررة
+        const currentStatus = await getOrderStatus(orderId);
+        
+        if (currentStatus === newStatus) {
+            logger.warn({ orderId, currentStatus, newStatus }, 'Status is already set to the requested value');
+            await ctx.answerCbQuery(`⚠️ الطلب بالفعل في حالة: ${getStatusText(newStatus)}`);
+            return;
+        }
+        
+        await updateOrderStatus(orderId, newStatus);
+        
+        // تحديث رسالة القناة بالحالة الجديدة
+        const messageId = ctx.callbackQuery.message?.message_id;
+        await updateChannelOrderStatus(bot, orderId, newStatus, messageId);
+        
+        logger.info({ orderId, oldStatus: currentStatus, newStatus }, 'Order status updated successfully');
+        await ctx.answerCbQuery(`✅ تم تحديث حالة الطلب إلى: ${getStatusText(newStatus)}`);
+    } catch (error) {
+        logger.error({ error, orderId, newStatus }, 'Failed to update order status');
+        await ctx.answerCbQuery('❌ حدث خطأ أثناء تحديث حالة الطلب');
+    }
+  });
+
   bot.on('callback_query', async (ctx: NarrowedContext<Context, CallbackQuery>) => {
     const action = ctx.callbackQuery.data ?? 'unknown';
     const userId = ctx.from?.id;
@@ -1401,6 +1932,21 @@ async function main() {
     logger.info({ userId, action }, 'Button pressed.');
 
     let handled = true;
+
+    // معالجة أزرار الولايات
+    if (action.startsWith('order:set_wilaya:')) {
+        if (!state) return;
+        const wilaya = action.replace('order:set_wilaya:', '');
+        state.stateCommune = wilaya;
+        await ctx.answerCbQuery(`${wilaya} ✅`);
+        if (state.isEditing) {
+            state.isEditing = false;
+            await showReview(ctx, state);
+        } else {
+            await promptForAddress(ctx, state);
+        }
+        return; // تم التعامل مع الطلب
+    }
 
     switch (action) {
       case 'order:start':
@@ -1474,13 +2020,14 @@ async function main() {
           break;
         }
         await ctx.answerCbQuery();
-        await handleConfirm(ctx, state);
+        await handleConfirm(bot, ctx, state); // مرر نسخة البوت
         break;
       case 'order:edit:name':
         if (!state) {
           handled = false;
           break;
         }
+        state.isEditing = true; // وضع علامة أننا في وضع التعديل
         await ctx.answerCbQuery();
         await promptForCustomerName(ctx, state);
         break;
@@ -1489,14 +2036,25 @@ async function main() {
           handled = false;
           break;
         }
+        state.isEditing = true;
         await ctx.answerCbQuery();
         await promptForPhone(ctx, state);
+        break;
+      case 'order:edit:state_commune': // زر تعديل الولاية الجديد
+        if (!state) {
+          handled = false;
+          break;
+        }
+        state.isEditing = true;
+        await ctx.answerCbQuery();
+        await promptForStateCommune(ctx, state);
         break;
       case 'order:edit:address':
         if (!state) {
           handled = false;
           break;
         }
+        state.isEditing = true;
         await ctx.answerCbQuery();
         await promptForAddress(ctx, state);
         break;
@@ -1505,6 +2063,7 @@ async function main() {
           handled = false;
           break;
         }
+        state.isEditing = true;
         await ctx.answerCbQuery();
         await promptForAmount(ctx, state);
         break;
@@ -1513,6 +2072,7 @@ async function main() {
           handled = false;
           break;
         }
+        state.isEditing = true;
         await ctx.answerCbQuery();
         await promptForNotes(ctx, state);
         break;
@@ -1537,10 +2097,459 @@ async function main() {
   await bot.launch();
 }
 
+// دالة مساعدة لتحويل حالة الطلب إلى نص عربي
+function getStatusText(status: string): string {
+  switch (status) {
+    case 'preparing': return 'قيد التجهيز';
+    case 'prepared': return 'تم التجهيز';
+    case 'shipped': return 'تم الإرسال';
+    case 'delivered': return 'تم التسليم';
+    case 'canceled': return 'تم الإلغاء';
+    default: return 'غير معروف';
+  }
+}
+
 main().catch((error) => {
   logger.error(error, 'Unhandled error during service startup');
   process.exit(1);
 });
 
+```
+
+
+
+# File: ./src/services/cloudinary.ts
+
+```
+
+import 'dotenv/config';
+import { v2 as cloudinary } from 'cloudinary';
+import { logger } from '../lib/logger.ts';
+import type { Telegraf } from 'telegraf';
+
+let isCloudinaryConfigured = false;
+
+function ensureCloudinaryConfigured() {
+  if (isCloudinaryConfigured) return;
+
+  if (!process.env.CLOUDINARY_URL) {
+    logger.error('CLOUDINARY_URL is not set. Cloudinary service cannot be used.');
+    throw new Error('Cloudinary configuration is missing.');
+  }
+  // تهيئة Cloudinary باستخدام متغير البيئة مباشرة
+  cloudinary.config(); // المكتبة تقرأ CLOUDINARY_URL تلقائياً
+  isCloudinaryConfigured = true;
+  logger.info('Cloudinary service configured successfully.');
+}
+
+// نوع البيانات التي تعود بعد الرفع الناجح
+export interface CloudinaryUploadResult {
+  secure_url: string; // رابط الصورة المباشر (CDN)
+  public_id: string; // المعرف الفريد للصورة في Cloudinary
+}
+
+/**
+ * تأخذ معرف ملف من تيليجرام (file_id)، تحصل على رابط التحميل المؤقت،
+ * وترفع الصورة مباشرة إلى Cloudinary.
+ * @param bot - نسخة Telegraf للوصول إلى API تيليجرام
+ * @param fileId - معرف الملف من تيليجرام
+ * @param orderId - معرف الطلب لاستخدامه في تنظيم المجلدات
+ * @returns Promise يحتوي على نتيجة الرفع من Cloudinary
+ */
+async function uploadTelegramFile(
+  bot: Telegraf,
+  fileId: string,
+  orderId: string
+): Promise<CloudinaryUploadResult> {
+  ensureCloudinaryConfigured(); // تأكد من أن التهيئة قد تمت
+
+  // 1. احصل على رابط التحميل المؤقت من تيليجرام
+  const fileLink = await bot.telegram.getFileLink(fileId);
+
+  // 2. ارفع الصورة إلى Cloudinary باستخدام الرابط مباشرة
+  //    هذا أكثر كفاءة من تحميل الملف ثم إعادة رفعه
+  logger.debug({ href: fileLink.href, folder: `orders/${orderId}` }, 'Attempting to upload to Cloudinary...');
+  const result = await cloudinary.uploader.upload(fileLink.href, {
+    folder: `orders/${orderId}`, // تنظيم الصور في مجلدات لكل طلب
+    resource_type: 'image',
+  });
+
+  // --- التحقق الإضافي ---
+  logger.info({ public_id: result.public_id, url: result.secure_url }, 'Cloudinary upload successful.');
+  if (!result.public_id || !result.secure_url) {
+      logger.error({ result }, 'Cloudinary returned a success status but missing critical data.');
+      throw new Error('Invalid response from Cloudinary.');
+  }
+
+  return result as CloudinaryUploadResult;
+}
+
+/**
+ * تأخذ مصفوفة من معرفات الملفات من تيليجرام وترفعها جميعاً إلى Cloudinary بالتوازي.
+ * @param bot - نسخة Telegraf
+ * @param fileIds - مصفوفة من معرفات الملفات
+ * @param orderId - معرف الطلب الحالي
+ * @returns مصفوفة من نتائج الرفع
+ */
+export async function uploadOrderPhotosToCloudinary(
+  bot: Telegraf,
+  fileIds: string[],
+  orderId: string
+): Promise<CloudinaryUploadResult[]> {
+  ensureCloudinaryConfigured(); // تأكد من أن التهيئة قد تمت
+
+  if (!fileIds || fileIds.length === 0) {
+    logger.warn(`No file IDs provided for order '${orderId}'. Skipping Cloudinary upload.`);
+    return [];
+  }
+
+  logger.info(`Uploading ${fileIds.length} photo(s) for order '${orderId}' to Cloudinary...`);
+
+  const uploadPromises = fileIds.map(fileId =>
+    uploadTelegramFile(bot, fileId, orderId)
+  );
+
+  const results = await Promise.all(uploadPromises);
+
+  logger.info(`Successfully uploaded ${results.length} photo(s) to Cloudinary for order '${orderId}'.`);
+  return results;
+}
+```
+
+
+
+# File: ./src/services/airtable.ts
+
+```
+
+import 'dotenv/config';
+import Airtable, { FieldSet, Record } from 'airtable';
+import { logger } from '../lib/logger.ts';
+import type { OrderState } from '../bot/types.ts';
+
+// --- تهيئة Airtable ---
+const { AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME } = process.env;
+
+if (!AIRTABLE_API_KEY || !AIRTABLE_BASE_ID || !AIRTABLE_TABLE_NAME) {
+  throw new Error('Airtable configuration is missing in .env file.');
+}
+
+const base = new Airtable({ apiKey: AIRTABLE_API_KEY }).base(AIRTABLE_BASE_ID);
+const table = base(AIRTABLE_TABLE_NAME);
+
+logger.info('Airtable service configured.');
+
+/**
+ * يولد معرف طلب جديد بالتسلسل اليومي
+ * @returns معرف الطلب بصيغة YCF-YYYY-MM-DD-XXX
+ */
+export async function generateOrderId(): Promise<string> {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const prefix = `YCF-${today}`;
+    
+    try {
+        // جلب جميع الطلبات لهذا اليوم
+        const records = await table.select({
+            filterByFormula: `FIND("${prefix}", {order_id}) = 1`,
+            fields: ['order_id'],
+            sort: [{ field: 'created_at', direction: 'desc' }]
+        }).all();
+        
+        // العثور على أعلى رقم تسلسلي لهذا اليوم
+        let maxNumber = 0;
+        records.forEach(record => {
+            const orderId = record.get('order_id') as string;
+            const match = orderId.match(/YCF-\d{4}-\d{2}-\d{2}-(\d{3})$/);
+            if (match) {
+                const num = parseInt(match[1], 10);
+                if (num > maxNumber) {
+                    maxNumber = num;
+                }
+            }
+        });
+        
+        // الرقم التالي
+        const nextNumber = maxNumber + 1;
+        const paddedNumber = nextNumber.toString().padStart(3, '0');
+        
+        const newOrderId = `${prefix}-${paddedNumber}`;
+        logger.info({ newOrderId, todaysOrderCount: nextNumber }, 'Generated new order ID');
+        
+        return newOrderId;
+    } catch (error) {
+        logger.error({ error }, 'Failed to generate order ID, falling back to timestamp');
+        // في حالة الخطأ، نستخدم الطريقة القديمة
+        return `YCF-${today}-${String(Date.now()).slice(-3)}`;
+    }
+}
+export async function saveOrderToAirtable(state: OrderState, orderId: string) {
+  logger.info({ orderId }, 'Saving order to Airtable...');
+
+  const cloudinaryUrls = state.cloudinaryPhotoData?.map(p => p.secure_url).join('\n') || '';
+
+  const recordData: FieldSet = {
+    order_id: orderId,
+    // created_at يتم إنشاؤه تلقائياً بواسطة Airtable
+    status: 'preparing',
+    customer_name: state.customerName,
+    phone: state.phone,
+    state_commune: state.stateCommune,
+    address: state.address,
+    amount_total: state.amountTotal,
+    notes: state.notes,
+    photo_links: cloudinaryUrls,
+  };
+
+  try {
+    await table.create([{ fields: recordData }]);
+    logger.info({ orderId }, 'Successfully saved order to Airtable.');
+  } catch (error) {
+    logger.error({ error, orderId }, 'Failed to save order to Airtable.');
+    throw error;
+  }
+}
+
+/**
+ * يجلب كل الطلبات من Airtable.
+ */
+export async function fetchAllOrders() {
+    logger.info('Fetching all orders from Airtable...');
+    try {
+        const records = await table.select({
+            // فرز حسب تاريخ الإنشاء (الأحدث أولاً)
+            sort: [{ field: 'created_at', direction: 'desc' }],
+            // جلب الحقول المطلوبة فقط للملخص
+            fields: ['order_id', 'customer_name', 'state_commune', 'amount_total'],
+        }).all();
+
+        return records.map(record => ({
+            orderId: record.get('order_id'),
+            customerName: record.get('customer_name'),
+            stateCommune: record.get('state_commune'),
+            amountTotal: record.get('amount_total'),
+        }));
+    } catch (error) {
+        logger.error({ error }, 'Failed to fetch all orders from Airtable.');
+        throw error;
+    }
+}
+
+/**
+ * يحدث حالة طلب معين في Airtable
+ * @param orderId معرف الطلب
+ * @param newStatus الحالة الجديدة
+ */
+export async function updateOrderStatus(orderId: string, newStatus: string) {
+    logger.info({ orderId, newStatus }, 'Updating order status in Airtable...');
+    
+    try {
+        const records = await table.select({
+            filterByFormula: `{order_id} = "${orderId}"`,
+            maxRecords: 1,
+        }).firstPage();
+
+        if (records.length === 0) {
+            throw new Error(`Order with ID ${orderId} not found`);
+        }
+        
+        const record = records[0];
+        await table.update(record.getId(), {
+            status: newStatus
+        });
+        
+        logger.info({ orderId, newStatus }, 'Successfully updated order status in Airtable.');
+    } catch (error) {
+        logger.error({ error, orderId, newStatus }, 'Failed to update order status in Airtable.');
+        throw error;
+    }
+}
+
+/**
+ * يجلب حالة طلب معين من Airtable
+ * @param orderId معرف الطلب
+ * @returns حالة الطلب أو null إذا لم يتم العثور عليه
+ */
+export async function getOrderStatus(orderId: string): Promise<string | null> {
+    logger.info({ orderId }, 'Fetching order status from Airtable...');
+    
+    try {
+        const records = await table.select({
+            filterByFormula: `{order_id} = "${orderId}"`,
+            fields: ['status'],
+            maxRecords: 1,
+        }).firstPage();
+
+        if (records.length === 0) {
+            return null;
+        }
+        
+        const status = records[0].get('status') as string || 'preparing';
+        logger.info({ orderId, status }, 'Successfully fetched order status from Airtable.');
+        return status;
+    } catch (error) {
+        logger.error({ error, orderId }, 'Failed to fetch order status from Airtable.');
+        throw error;
+    }
+}
+export async function fetchOrderById(orderId: string) {
+    logger.info({ orderId }, 'Fetching order details from Airtable...');
+    try {
+        const records = await table.select({
+            filterByFormula: `{order_id} = "${orderId}"`,
+            maxRecords: 1,
+        }).firstPage();
+
+        if (records.length === 0) {
+            return null;
+        }
+        
+        const record = records[0];
+        const photoLinks = (record.get('photo_links') as string || '').split('\n').filter(Boolean);
+
+        return {
+            customerName: record.get('customer_name'),
+            phone: record.get('phone'),
+            stateCommune: record.get('state_commune'),
+            address: record.get('address'),
+            paymentMethod: 'COD', // ثابت
+            amountTotal: record.get('amount_total'),
+            notes: record.get('notes'),
+            cloudinaryPhotoData: photoLinks.map(url => ({ secure_url: url })),
+            telegramFileIds: photoLinks, // لحساب العدد فقط
+        } as Partial<OrderState>;
+
+    } catch (error) {
+        logger.error({ error, orderId }, 'Failed to fetch order by ID from Airtable.');
+        throw error;
+    }
+}
+```
+
+
+
+# File: ./src/services/telegram.ts
+
+```
+
+import { logger } from '../lib/logger.ts';
+import type { Telegraf } from 'telegraf';
+import type { OrderState } from '../bot/types.ts';
+import { formatOrderMessage, getChannelControlKeyboard, getStatusDisplayText } from '../bot/ui.ts';
+import { getOrderStatus } from './airtable.ts';
+
+/**
+ * يرسل تفاصيل الطلب المكتمل إلى القناة المحددة.
+ * @param bot نسخة Telegraf
+ * @param state بيانات الطلب المكتملة
+ * @param orderId المعرف الفريد للطلب
+ */
+export async function postOrderToChannel(bot: Telegraf, state: OrderState, orderId: string) {
+  const channelId = process.env.TELEGRAM_CHANNEL_ID;
+  if (!channelId) {
+    logger.error('TELEGRAM_CHANNEL_ID is not set. Cannot post to channel.');
+    return;
+  }
+
+  if (!state.cloudinaryPhotoData || state.cloudinaryPhotoData.length === 0) {
+    logger.error({ orderId }, 'No Cloudinary photos found in state. Cannot post to channel.');
+    return;
+  }
+
+  logger.info({ orderId, channelId }, 'Posting new order to Telegram channel...');
+
+  // 2. جهز مجموعة الصور (Media Group) مع الحالة
+  const fullCaption = formatOrderMessage(state, orderId, false, 'preparing');
+
+  // 2. جهز مجموعة الصور (Media Group)
+  const mediaGroup = state.cloudinaryPhotoData.map((photo, index) => ({
+    type: 'photo' as const,
+    media: photo.secure_url, // استخدم رابط الصورة المباشر من Cloudinary
+    caption: index === 0 ? fullCaption : '', // أضف الوصف الكامل على أول صورة فقط
+    parse_mode: 'Markdown' as const,
+  }));
+
+  try {
+    // 3. أرسل مجموعة الصور إلى القناة
+    await bot.telegram.sendMediaGroup(channelId, mediaGroup);
+    
+    // 4. أرسل رسالة منفصلة تحتوي على أزرار التحكم بالحالة الابتدائية
+    const keyboard = getChannelControlKeyboard(orderId, 'preparing');
+    await bot.telegram.sendMessage(channelId, `*التحكم بالطلب: ${orderId}*`, {
+        ...keyboard,
+        parse_mode: 'Markdown',
+    });
+
+    logger.info({ orderId }, 'Successfully posted order to channel.');
+  } catch (error) {
+    logger.error({ error, orderId, channelId }, 'Failed to post order to Telegram channel.');
+    // ألقِ خطأً لإعلام الدالة المستدعية بالفشل
+    throw new Error('Failed to post to channel');
+  }
+}
+
+/**
+ * يحدث رسالة الطلب في القناة عند تغيير الحالة
+ * @param bot نسخة Telegraf
+ * @param orderId معرف الطلب
+ * @param newStatus الحالة الجديدة
+ * @param controlMessageId معرف رسالة أزرار التحكم
+ */
+export async function updateChannelOrderStatus(bot: Telegraf, orderId: string, newStatus: string, controlMessageId?: number) {
+  const channelId = process.env.TELEGRAM_CHANNEL_ID;
+  if (!channelId) {
+    logger.error('TELEGRAM_CHANNEL_ID is not set. Cannot update channel message.');
+    return;
+  }
+
+  logger.info({ orderId, newStatus }, 'Updating order status in channel...');
+
+  try {
+    // الحصول على الحالة الحالية للطلب
+    const currentStatus = await getOrderStatus(orderId);
+    if (!currentStatus) {
+      throw new Error(`Order ${orderId} not found`);
+    }
+
+    // تحديث الأزرار حسب الحالة الجديدة
+    const newKeyboard = getChannelControlKeyboard(orderId, currentStatus);
+    const statusText = getStatusDisplayText(currentStatus);
+    
+    const updatedMessage = `*التحكم بالطلب: ${orderId}*\n✨ *الحالة:* ${statusText}`;
+
+    // إذا كان لدينا معرف رسالة التحكم، حدثها
+    if (controlMessageId) {
+      try {
+        await bot.telegram.editMessageText(
+          channelId,
+          controlMessageId,
+          undefined,
+          updatedMessage,
+          {
+            parse_mode: 'Markdown',
+            ...newKeyboard
+          }
+        );
+      } catch (editError: any) {
+        // إذا كان الخطأ هو "لم يتم تعديل الرسالة"، فهذا يعني أن الرسالة لا تحتاج لتحديث
+        if (editError.response?.description?.includes('message is not modified')) {
+          logger.info({ orderId, newStatus: currentStatus }, 'Channel message already has the correct status, no update needed');
+          return; // لا ترمي خطأ في هذه الحالة
+        }
+        throw editError; // رمي أي خطأ آخر
+      }
+    } else {
+      // إذا لم يكن لدينا معرف، أرسل رسالة جديدة
+      await bot.telegram.sendMessage(channelId, updatedMessage, {
+        parse_mode: 'Markdown',
+        ...newKeyboard
+      });
+    }
+
+    logger.info({ orderId, newStatus: currentStatus }, 'Successfully updated order status in channel.');
+  } catch (error) {
+    logger.error({ error, orderId, newStatus }, 'Failed to update order status in channel.');
+    throw error;
+  }
+}
 ```
 

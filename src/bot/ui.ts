@@ -1,5 +1,5 @@
 import { Markup } from 'telegraf';
-import type { OrderState } from './types.ts';
+import type { OrderState } from './types.js';
 
 export const L = {
   welcome: 'مرحباً بك! كيف يمكنني خدمتك؟',
