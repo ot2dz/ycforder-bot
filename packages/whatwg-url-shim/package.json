@@ -1,0 +1,6 @@
+{
+  "name": "whatwg-url",
+  "version": "5.0.0-shim",
+  "type": "commonjs",
+  "main": "index.js"
+}
