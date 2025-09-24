@@ -51,12 +51,32 @@ pnpm start
 
 ### 3. Deployment on Coolify
 
-1. **Build Pack**: Choose "Nixpacks"
+**✅ Nixpacks-Only Setup (Recommended)**
+
+1. **Build Pack**: Choose "**Nixpacks**" (automatic Node.js detection)
 2. **Repository**: `https://github.com/ot2dz/ycforder-bot.git`
 3. **Branch**: `main`
 4. **Port**: `3000`
-5. **Environment Variables**: Set all required variables
+5. **Environment Variables**: Set all required variables (see below)
 6. **Health Check**: `/health`
+
+**Environment Variables to set in Coolify:**
+```
+NODE_ENV=production
+PORT=3000
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+TELEGRAM_CHANNEL_ID=your_channel_id_here
+AIRTABLE_API_KEY=your_airtable_api_key
+AIRTABLE_BASE_ID=your_airtable_base_id
+AIRTABLE_TABLE_NAME=your_table_name
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_cloudinary_api_key
+CLOUDINARY_API_SECRET=your_cloudinary_api_secret
+AUTHORIZED_USER_IDS=user1,user2,user3
+LOG_LEVEL=info
+```
+
+⚠️ **Security Note**: Never commit secrets to the repository. Always set them as runtime Environment Variables in Coolify.
 
 ## Order Status Flow 🔄
 
@@ -76,12 +96,12 @@ pnpm start
 
 - **Runtime**: Node.js 20
 - **Language**: TypeScript
+- **Package Manager**: pnpm 10.15.0 (pinned)
 - **Bot Framework**: Telegraf
 - **Database**: Airtable
 - **File Storage**: Cloudinary
-- **Package Manager**: pnpm
 - **Build Tool**: TypeScript Compiler
-- **Deployment**: Coolify with Nixpacks
+- **Deployment**: Coolify with Nixpacks (auto-detection)
 
 ## Project Structure 📁
 

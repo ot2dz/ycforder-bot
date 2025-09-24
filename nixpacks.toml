@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ['nodejs_20', 'pnpm_8']
+nixPkgs = ['nodejs_20']
 
 [phases.install]
-cmd = 'pnpm install --frozen-lockfile'
+cmd = 'corepack enable && corepack prepare pnpm@10.15.0 --activate && pnpm install --frozen-lockfile'
 
 [phases.build]
 cmd = 'pnpm run build'
@@ -13,4 +13,3 @@ cmd = 'pnpm start'
 [variables]
 NODE_ENV = 'production'
 PORT = '3000'
-NPM_CONFIG_PRODUCTION = 'false'
