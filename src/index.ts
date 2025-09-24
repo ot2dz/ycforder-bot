@@ -1,7 +1,9 @@
 import 'dotenv/config';
-// import './lib/registerWhatwgUrlShim.js';
+import './lib/registerWhatwgUrlShim.ts';
+import http from 'node:http'; // <-- ✅ استيراد بالطريقة الصحيحة
 import { Telegraf, Markup, type Context, type NarrowedContext } from 'telegraf';
-import { logger } from './lib/logger.js';
+import type { CallbackQuery } from 'telegraf/typings/core/types/typegram';
+import { logger } from './lib/logger.ts';
 import { L, formatOrderMessage, getMainMenuKeyboard } from './bot/ui.js';
 import { userStates } from './bot/types.js';
 import {
@@ -36,23 +38,22 @@ async function main() {
     process.exit(1);
   }
 
-  const { Telegraf } = await import('telegraf');
   const bot = new Telegraf(botToken);
 
-  // Add simple HTTP server for health checks
-  const http = require('http');
+  // --- Health Check Server ---
+  // نقوم بنقل الخادم إلى داخل الدالة الرئيسية لضمان عدم تشغيله إلا بعد نجاح كل شيء
   const server = http.createServer((req: any, res: any) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'healthy', timestamp: new Date().toISOString() }));
     } else {
-      res.writeHead(404);
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not Found');
     }
   });
   
   const PORT = process.env.PORT || 3000;
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => { // استمع على 0.0.0.0 ليكون متوافقاً مع Docker
     logger.info(`Health check server running on port ${PORT}`);
   });
 
