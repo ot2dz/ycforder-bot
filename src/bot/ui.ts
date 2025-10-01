@@ -1,5 +1,6 @@
 import { Markup } from 'telegraf';
 import type { OrderState } from './types.js';
+import { getDistributorCommission, calculateRemainingBalance, hasCreditBalance, getCreditAmount } from '../lib/commission.js';
 
 export const L = {
   welcome: 'مرحباً بك! كيف يمكنني خدمتك؟',
@@ -24,6 +25,7 @@ export const L = {
   // Main Menu
   newOrder: '🆕 طلب جديد', // اختصار بسيط
   myOrders: '📦 عرض الطلبات', // <-- التغيير هنا
+  statistics: '📊 إحصائيات البلدان', // جديد
   help: 'ℹ️ مساعدة',
   back: '⬅️ رجوع',
   cancel: '❌ إلغاء',
@@ -52,7 +54,8 @@ type ReplyKeyboardMarkup = ReturnType<typeof Markup.keyboard>;
 export function getMainMenuKeyboard(): ReplyKeyboardMarkup {
   return Markup.keyboard([
     [Markup.button.text(L.newOrder)],
-    [Markup.button.text(L.myOrders), Markup.button.text(L.help)]
+    [Markup.button.text(L.myOrders), Markup.button.text(L.statistics)],
+    [Markup.button.text(L.help)]
   ]).resize();
 }
 
@@ -75,6 +78,46 @@ export function getWilayasKeyboard(): InlineKeyboardMarkup {
     [Markup.button.callback(L.stateAdrar, 'order:set_wilaya:أدرار')],
     [Markup.button.callback(L.stateReggane, 'order:set_wilaya:رقان')],
     [Markup.button.callback(L.cancel, 'order:cancel')] // زر الإلغاء مهم هنا
+  ]);
+}
+
+/**
+ * قائمة اختيار البلدان للإحصائيات
+ */
+export function getStatisticsWilayasKeyboard(): InlineKeyboardMarkup {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('📊 عين صالح', 'stats:wilaya:عين صالح')],
+    [Markup.button.callback('📊 تمنراست', 'stats:wilaya:تمنراست')],
+    [Markup.button.callback('📊 أولف', 'stats:wilaya:أولف')],
+    [Markup.button.callback('📊 أدرار', 'stats:wilaya:أدرار')],
+    [Markup.button.callback('📊 رقان', 'stats:wilaya:رقان')]
+  ]);
+}
+
+/**
+ * قائمة أزرار خيارات الإحصائيات
+ */
+export function getStatisticsActionsKeyboard(wilaya: string): InlineKeyboardMarkup {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('📋 عرض التفاصيل', `stats:details:${wilaya}`)],
+    [Markup.button.callback('🔍 فلترة حسب الحالة', `stats:filter:${wilaya}`),
+     Markup.button.callback('💼 تقرير المحاسبة', `stats:accounting:${wilaya}`)],
+    [Markup.button.callback('💰 استلام مبلغ', `payment:receive:${wilaya}`),
+     Markup.button.callback('📊 إدارة المدفوعات', `payment:manage:${wilaya}`)],
+    [Markup.button.callback('⬅️ عودة', 'stats:back')]
+  ]);
+}
+
+/**
+ * قائمة فلترة الحالات
+ */
+export function getStatusFilterKeyboard(wilaya: string): InlineKeyboardMarkup {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('🔍 قيد التجهيز', `stats:status:${wilaya}:preparing`)],
+    [Markup.button.callback('✅ تم التجهيز', `stats:status:${wilaya}:prepared`)],
+    [Markup.button.callback('🚚 تم الإرسال', `stats:status:${wilaya}:shipped`)],
+    [Markup.button.callback('📦 تم التسليم', `stats:status:${wilaya}:delivered`)],
+    [Markup.button.callback('⬅️ عودة', `stats:wilaya:${wilaya}`)]
   ]);
 }
 
@@ -226,4 +269,171 @@ export function getStatusDisplayText(status: string): string {
     case 'canceled': return '❌ تم الإلغاء';
     default: return '❓ غير معروف';
   }
+}
+
+/**
+ * تنسيق تقرير إحصائيات البلد مع العمولات ونظام الائتمان
+ */
+export function formatWilayaStatisticsReport(wilaya: string, stats: any, totalReceived: number = 0): string {
+  const separator = '━━━━━━━━━━━━━━━━━━━━━';
+  
+  // حساب مبالغ المحاسبة مع العمولات
+  const shippedAmount = stats.byStatus.shipped.amount;
+  const deliveredAmount = stats.byStatus.delivered.amount;
+  const totalOrderAmount = shippedAmount + deliveredAmount;
+  
+  // حساب العمولات
+  const commission = getDistributorCommission(wilaya);
+  const totalOrdersForAccounting = stats.byStatus.shipped.count + stats.byStatus.delivered.count;
+  const totalCommissions = commission * totalOrdersForAccounting;
+  const totalCollectible = totalOrderAmount - totalCommissions;
+  
+  // استيراد دوال الائتمان من مل commission
+  const remainingBalance = calculateRemainingBalance(totalCollectible, totalReceived);
+  const hasCredit = hasCreditBalance(remainingBalance);
+  const creditAmount = getCreditAmount(remainingBalance);
+  
+  // بناء قسم عرض الرصيد
+  let balanceSection;
+  if (hasCredit) {
+    balanceSection = (
+      `💰 المستلم فعلاً: ${totalReceived.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+      `🟢 **رصيد ائتمان: ${creditAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج**`
+    );
+  } else if (remainingBalance === 0) {
+    balanceSection = (
+      `💰 المستلم فعلاً: ${totalReceived.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+      `✅ **تم التحصيل بالكامل**`
+    );
+  } else {
+    balanceSection = (
+      `💰 المستلم فعلاً: ${totalReceived.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+      `⏳ **المتبقي: ${remainingBalance.toLocaleString('ar-DZ', { useGrouping: false })} د.ج**`
+    );
+  }
+  
+  return (
+    `📊 *إحصائيات بلد: ${wilaya}*\n` +
+    `${separator}\n` +
+    `📦 إجمالي الطلبيات: *${stats.totalOrders}*\n` +
+    `💰 إجمالي المبالغ: *${stats.totalAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج*\n` +
+    `${separator}\n\n` +
+    `📋 *حسب الحالة:*\n` +
+    `🔍 قيد التجهيز: ${stats.byStatus.preparing.count} طلبيات (${stats.byStatus.preparing.amount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج)\n` +
+    `✅ تم التجهيز: ${stats.byStatus.prepared.count} طلبيات (${stats.byStatus.prepared.amount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج)\n` +
+    `🚚 تم الإرسال: ${stats.byStatus.shipped.count} طلبيات (${stats.byStatus.shipped.amount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج)\n` +
+    `📦 تم التسليم: ${stats.byStatus.delivered.count} طلبيات (${stats.byStatus.delivered.amount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج)\n\n` +
+    `${separator}\n` +
+    `💼 *للمحاسبة مع الموزع:*\n` +
+    `📦 إجمالي قيمة الطلبيات: ${totalOrderAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+    `➖ عمولة الموزع (${commission} د.ج × ${totalOrdersForAccounting}): ${totalCommissions.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+    `💵 *المطلوب تحصيله: ${totalCollectible.toLocaleString('ar-DZ', { useGrouping: false })} د.ج*\n\n` +
+    balanceSection
+  );
+}
+
+/**
+ * تنسيق قائمة طلبيات مفصلة
+ */
+export function formatOrdersList(orders: any[], title: string): string {
+  if (orders.length === 0) {
+    return `${title}\n\n⚠️ لا توجد طلبيات في هذه الفئة.`;
+  }
+  
+  let message = `${title}\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  
+  orders.slice(0, 10).forEach((order, index) => { // عرض أول 10 طلبيات فقط
+    const statusEmoji = getStatusEmoji(order.status);
+    const date = new Date(order.createdAt).toLocaleDateString('ar-DZ');
+    
+    message += `${index + 1}. *${order.orderId}*\n`;
+    message += `   👤 ${order.customerName || 'غير محدد'}\n`;
+    message += `   💰 ${(order.amountTotal || 0).toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n`;
+    message += `   ${statusEmoji} ${getStatusDisplayText(order.status)}\n`;
+    message += `   📅 ${date}\n\n`;
+  });
+  
+  if (orders.length > 10) {
+    message += `… و${orders.length - 10} طلبيات أخرى`;
+  }
+  
+  return message;
+}
+
+/**
+ * الحصول على رمز الحالة
+ */
+function getStatusEmoji(status: string): string {
+  switch (status) {
+    case 'preparing': return '🔍';
+    case 'prepared': return '✅';
+    case 'shipped': return '🚚';
+    case 'delivered': return '📦';
+    case 'canceled': return '❌';
+    default: return '❔';
+  }
+}
+
+/**
+ * لوحة مفاتيح إدارة المدفوعات
+ */
+export function getPaymentManagementKeyboard(wilaya: string): InlineKeyboardMarkup {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('📊 عرض قائمة المدفوعات', `payment:list:${wilaya}`)],
+    [Markup.button.callback('💰 إضافة دفعة جديدة', `payment:receive:${wilaya}`)],
+    [Markup.button.callback('⬅️ عودة', `stats:wilaya:${wilaya}`)]
+  ]);
+}
+
+/**
+ * لوحة مفاتيح تعديل دفعة معينة
+ */
+export function getPaymentEditKeyboard(paymentId: string, wilaya: string): InlineKeyboardMarkup {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('✏️ تعديل المبلغ', `payment:edit:${paymentId}`)],
+    [Markup.button.callback('🗑️ حذف الدفعة', `payment:delete:${paymentId}`)],
+    [Markup.button.callback('⬅️ عودة', `payment:manage:${wilaya}`)]
+  ]);
+}
+
+/**
+ * تنسيق قائمة المدفوعات مع أزرار التعديل
+ */
+export function formatPaymentsList(payments: any[], wilaya: string): { message: string; keyboard: InlineKeyboardMarkup } {
+  if (payments.length === 0) {
+    return {
+      message: `📊 *قائمة مدفوعات ${wilaya}*\n\n⚠️ لا توجد مدفوعات مسجلة بعد.`,
+      keyboard: getPaymentManagementKeyboard(wilaya)
+    };
+  }
+
+  let message = `📊 *قائمة مدفوعات ${wilaya}*\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+  
+  const buttons: any[][] = [];
+  
+  payments.slice(0, 8).forEach((payment, index) => {
+    const date = payment.createdAt ? new Date(payment.createdAt as string).toLocaleDateString('ar-DZ') : 'غير محدد';
+    message += `${index + 1}. 💰 ${(payment.amount || 0).toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n`;
+    message += `   📅 ${date}\n`;
+    if (payment.notes && payment.notes !== 'تم التسجيل عبر البوت') {
+      message += `   📝 ${payment.notes}\n`;
+    }
+    message += `\n`;
+    
+    // إضافة زر لكل دفعة
+    buttons.push([Markup.button.callback(`✏️ تعديل #${index + 1}`, `payment:select:${payment.paymentId}`)]);
+  });
+  
+  if (payments.length > 8) {
+    message += `... و${payments.length - 8} عمليات أخرى\n`;
+  }
+  
+  // إضافة أزرار التحكم
+  buttons.push([Markup.button.callback('⬅️ عودة', `stats:wilaya:${wilaya}`)]);
+  
+  return {
+    message,
+    keyboard: Markup.inlineKeyboard(buttons)
+  };
 }

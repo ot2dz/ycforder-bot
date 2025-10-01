@@ -3,7 +3,7 @@ import './lib/registerWhatwgUrlShim.js';
 import http from 'node:http'; // <-- ✅ استيراد بالطريقة الصحيحة
 import { Telegraf, Markup, type Context, type NarrowedContext } from 'telegraf';
 import { logger } from './lib/logger.js';
-import { L, formatOrderMessage, getMainMenuKeyboard } from './bot/ui.js';
+import { L, formatOrderMessage, getMainMenuKeyboard, getStatisticsWilayasKeyboard, getStatisticsActionsKeyboard, getStatusFilterKeyboard, formatWilayaStatisticsReport, formatOrdersList, getStatusDisplayText, formatPaymentsList, getPaymentEditKeyboard } from './bot/ui.js';
 import { userStates } from './bot/types.js';
 import {
   finalizeMediaGroup,
@@ -19,9 +19,9 @@ import {
   showReview,
   startWizard
 } from './bot/wizard.js';
-import { fetchOrderById, fetchAllOrders, updateOrderStatus, getOrderStatus } from './services/airtable.js';
+import { fetchOrderById, fetchAllOrders, updateOrderStatus, getOrderStatus, deleteOrder, getOrdersByWilaya, getOrderStatisticsByWilaya, getOrdersByWilayaAndStatus, recordDistributorPayment, getTotalReceivedFromDistributor, getDistributorPaymentHistory, deletePaymentRecord, updatePaymentRecord } from './services/airtable.js';
 import { isUserAuthorized } from './bot/auth.js';
-import { updateChannelOrderStatus } from './services/telegram.js';
+import { updateChannelOrderStatus, deleteOrderFromChannel } from './services/telegram.js';
 
 interface MediaGroupCacheEntry {
   fileIds: string[];
@@ -138,6 +138,22 @@ async function main() {
         logger.error({ error, userId: ctx.from.id }, 'Failed to fetch all orders.');
         await ctx.reply('حدث خطأ أثناء جلب الطلبات. يرجى المحاولة مرة أخرى.');
     }
+  });
+
+  bot.hears(L.statistics, async (ctx) => {
+    // التحقق من الصلاحيات
+    if (!isUserAuthorized(ctx.from.id)) {
+        await ctx.reply('ليس لديك الصلاحية لعرض الإحصائيات.');
+        return;
+    }
+
+    await ctx.reply(
+        '📊 *إحصائيات البلدان*\n\nاختر البلد لعرض إحصائياته:',
+        {
+            parse_mode: 'Markdown',
+            ...getStatisticsWilayasKeyboard()
+        }
+    );
   });
   bot.hears(L.help, (ctx) => ctx.reply('لإنشاء طلب جديد، اضغط على زر "🆕 إنشاء طلب جديد" في الأسفل. لإلغاء الطلب أثناء إدخاله، استخدم زر "❌ إلغاء" الموجود أسفل الرسالة.'));
 
@@ -261,6 +277,36 @@ async function main() {
     const newStatus = ctx.match[1];
     const orderId = ctx.match[2];
     
+    // معالجة خاصة لحذف الطلب عند الضغط على "إلغاء الطلبية"
+    if (newStatus === 'canceled') {
+      await ctx.answerCbQuery(`حذف الطلب ${orderId} نهائياً...`);
+      
+      try {
+        // التأكد من وجود الطلب أولاً
+        const currentStatus = await getOrderStatus(orderId);
+        if (!currentStatus) {
+          await ctx.answerCbQuery(`⚠️ الطلب ${orderId} غير موجود`);
+          return;
+        }
+        
+        // حذف الطلب من قاعدة البيانات
+        await deleteOrder(orderId);
+        
+        // حذف/تحديث رسائل القناة
+        const messageId = ctx.callbackQuery.message?.message_id;
+        await deleteOrderFromChannel(bot, orderId, messageId);
+        
+        logger.info({ orderId }, 'Order permanently deleted successfully');
+        await ctx.answerCbQuery(`✅ تم حذف الطلب ${orderId} نهائياً من النظام`);
+        
+      } catch (error) {
+        logger.error({ error, orderId }, 'Failed to delete order permanently');
+        await ctx.answerCbQuery('❌ حدث خطأ أثناء حذف الطلب');
+      }
+      return;
+    }
+    
+    // معالجة طبيعية لتحديث الحالات الأخرى
     await ctx.answerCbQuery(`تحديث حالة الطلب ${orderId}...`);
 
     try {
@@ -284,6 +330,350 @@ async function main() {
     } catch (error) {
         logger.error({ error, orderId, newStatus }, 'Failed to update order status');
         await ctx.answerCbQuery('❌ حدث خطأ أثناء تحديث حالة الطلب');
+    }
+  });
+
+  // معالجات نظام الإحصائيات
+  bot.action(/^stats:wilaya:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery(`جلب إحصائيات ${wilaya}...`);
+
+    try {
+      const stats = await getOrderStatisticsByWilaya(wilaya);
+      const totalReceived = await getTotalReceivedFromDistributor(wilaya);
+      const report = formatWilayaStatisticsReport(wilaya, stats, totalReceived);
+      
+      await ctx.editMessageText(report, {
+        parse_mode: 'Markdown',
+        ...getStatisticsActionsKeyboard(wilaya)
+      });
+    } catch (error) {
+      logger.error({ error, wilaya }, 'Failed to fetch wilaya statistics');
+      await ctx.answerCbQuery('❌ حدث خطأ في جلب الإحصائيات');
+    }
+  });
+
+  bot.action(/^stats:details:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery(`جلب تفاصيل طلبيات ${wilaya}...`);
+
+    try {
+      const orders = await getOrdersByWilaya(wilaya);
+      const message = formatOrdersList(orders, `📋 طلبيات ${wilaya} (إجمالي: ${orders.length})`);
+      
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        ...getStatisticsActionsKeyboard(wilaya)
+      });
+    } catch (error) {
+      logger.error({ error, wilaya }, 'Failed to fetch wilaya orders');
+      await ctx.answerCbQuery('❌ حدث خطأ في جلب الطلبات');
+    }
+  });
+
+  bot.action(/^stats:filter:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery('اختر الحالة للفلترة...');
+
+    await ctx.editMessageText(
+      `🔍 *فلترة طلبيات ${wilaya} حسب الحالة*\n\nاختر الحالة المطلوبة:`,
+      {
+        parse_mode: 'Markdown',
+        ...getStatusFilterKeyboard(wilaya)
+      }
+    );
+  });
+
+  bot.action(/^stats:status:(.+):(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    const status = ctx.match[2];
+    await ctx.answerCbQuery(`جلب طلبيات ${status}...`);
+
+    try {
+      const orders = await getOrdersByWilayaAndStatus(wilaya, status);
+      const statusText = getStatusDisplayText(status);
+      const message = formatOrdersList(orders, `📋 طلبيات ${wilaya} - ${statusText} (إجمالي: ${orders.length})`);
+      
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        ...getStatusFilterKeyboard(wilaya)
+      });
+    } catch (error) {
+      logger.error({ error, wilaya, status }, 'Failed to fetch filtered orders');
+      await ctx.answerCbQuery('❌ حدث خطأ في جلب الطلبات');
+    }
+  });
+
+  bot.action(/^stats:accounting:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery(`حساب تقرير المحاسبة...`);
+
+    try {
+      const stats = await getOrderStatisticsByWilaya(wilaya);
+      const shippedAmount = stats.byStatus.shipped.amount;
+      const deliveredAmount = stats.byStatus.delivered.amount;
+      const totalForAccounting = shippedAmount + deliveredAmount;
+      
+      const accountingReport = (
+        `💼 *تقرير المحاسبة - ${wilaya}*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `🚚 *المرسل للموزع:*\n` +
+        `   • عدد الطلبيات: ${stats.byStatus.shipped.count}\n` +
+        `   • إجمالي المبلغ: ${shippedAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n\n` +
+        `📦 *المسلم من الموزع:*\n` +
+        `   • عدد الطلبيات: ${stats.byStatus.delivered.count}\n` +
+        `   • إجمالي المبلغ: ${deliveredAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💵 **إجمالي المطلوب تحصيله: ${totalForAccounting.toLocaleString('ar-DZ', { useGrouping: false })} د.ج**`
+      );
+      
+      await ctx.editMessageText(accountingReport, {
+        parse_mode: 'Markdown',
+        ...getStatisticsActionsKeyboard(wilaya)
+      });
+    } catch (error) {
+      logger.error({ error, wilaya }, 'Failed to generate accounting report');
+      await ctx.answerCbQuery('❌ حدث خطأ في إعداد التقرير');
+    }
+  });
+
+  bot.action('stats:back', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      '📊 *إحصائيات البلدان*\n\nاختر البلد لعرض إحصائياته:',
+      {
+        parse_mode: 'Markdown',
+        ...getStatisticsWilayasKeyboard()
+      }
+    );
+  });
+
+  // معالجات نظام المدفوعات والعمولات
+  bot.action(/^payment:receive:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery();
+    
+    // حفظ الولاية في حالة المستخدم لاستخدامها عند إدخال المبلغ
+    let state = userStates.get(ctx.from.id);
+    if (!state) {
+      state = { step: 'awaiting_payment_amount', wilayaForPayment: wilaya } as any;
+      userStates.set(ctx.from.id, state);
+    } else {
+      state.step = 'awaiting_payment_amount';
+      state.wilayaForPayment = wilaya;
+    }
+    
+    await ctx.editMessageText(
+      `💰 *تسجيل استلام مبلغ من موزع ${wilaya}*\n\n` +
+      `يرجى إدخال المبلغ المستلم (بالأرقام فقط):\n\n` +
+      `مثال: 5000`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('❌ إلغاء', `stats:wilaya:${wilaya}`)]
+        ])
+      }
+    );
+  });
+
+  bot.action(/^payment:history:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery(`جلب تاريخ المدفوعات لـ ${wilaya}...`);
+
+    try {
+      const [totalReceived, stats, paymentHistory] = await Promise.all([
+        getTotalReceivedFromDistributor(wilaya),
+        getOrderStatisticsByWilaya(wilaya),
+        getDistributorPaymentHistory(wilaya)
+      ]);
+      
+      // حساب التفاصيل المالية
+      const shippedAmount = stats.byStatus.shipped.amount;
+      const deliveredAmount = stats.byStatus.delivered.amount;
+      const totalOrderAmount = shippedAmount + deliveredAmount;
+      
+      // حساب العمولات (استيراد الدالة من ملف العمولات)
+      const { getDistributorCommission, calculateRemainingBalance, hasCreditBalance, getCreditAmount } = await import('./lib/commission.js');
+      const commission = getDistributorCommission(wilaya);
+      const totalOrdersForAccounting = stats.byStatus.shipped.count + stats.byStatus.delivered.count;
+      const totalCommissions = commission * totalOrdersForAccounting;
+      const totalCollectible = totalOrderAmount - totalCommissions;
+      const remainingBalance = calculateRemainingBalance(totalCollectible, totalReceived);
+      const hasCredit = hasCreditBalance(remainingBalance);
+      const creditAmount = getCreditAmount(remainingBalance);
+      
+      // بناء قسم عرض الرصيد مع نظام الائتمان
+      let balanceSection;
+      if (hasCredit) {
+        balanceSection = (
+          `💰 *حالة المدفوعات:*\n` +
+          `• المستلم: ${totalReceived.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+          `• 🟢 **رصيد ائتمان: ${creditAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج**\n\n` +
+          `📊 *حالة الحساب:* متقدم في الدفع`
+        );
+      } else if (remainingBalance === 0) {
+        balanceSection = (
+          `💰 *حالة المدفوعات:*\n` +
+          `• المستلم: ${totalReceived.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+          `• ✅ **تم التحصيل بالكامل**\n\n` +
+          `📊 *حالة الحساب:* مكتمل`
+        );
+      } else {
+        balanceSection = (
+          `💰 *حالة المدفوعات:*\n` +
+          `• المستلم: ${totalReceived.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+          `• المتبقي: ${remainingBalance.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n\n` +
+          `📊 *حالة الحساب:* ${totalCollectible > 0 ? Math.round((totalReceived / totalCollectible) * 100) : 0}% مكتمل`
+        );
+      }
+      
+      // بناء تقرير تاريخ المدفوعات
+      let historyReport = (
+        `📈 *تقرير المدفوعات - ${wilaya}*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `💵 *الملخص المالي:*\n` +
+        `• إجمالي قيمة الطلبيات: ${totalOrderAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+        `• عمولة الموزع: ${totalCommissions.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+        `• المطلوب تحصيله: ${totalCollectible.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n\n` +
+        balanceSection
+      );
+      
+      // إضافة تاريخ المدفوعات إذا وجد
+      if (paymentHistory && paymentHistory.length > 0) {
+        historyReport += `📋 *سجل المدفوعات:*\n`;
+        paymentHistory.slice(0, 5).forEach((payment, index) => {
+          const date = payment.createdAt ? new Date(payment.createdAt as string).toLocaleDateString('ar-DZ') : 'غير محدد';
+          historyReport += `${index + 1}. ${(payment.amount || 0).toLocaleString('ar-DZ', { useGrouping: false })} د.ج - ${date}\n`;
+        });
+        
+        if (paymentHistory.length > 5) {
+          historyReport += `... و${paymentHistory.length - 5} عمليات أخرى\n`;
+        }
+      } else {
+        historyReport += `📋 *سجل المدفوعات:*\n⚠️ لا توجد عمليات دفع مسجلة بعد.\n`;
+      }
+      
+      await ctx.editMessageText(historyReport, {
+        parse_mode: 'Markdown',
+        ...getStatisticsActionsKeyboard(wilaya)
+      });
+    } catch (error) {
+      logger.error({ error, wilaya }, 'Failed to fetch payment history');
+      await ctx.answerCbQuery('❌ حدث خطأ في جلب تاريخ المدفوعات');
+    }
+  });
+
+  // معالجات إدارة المدفوعات
+  bot.action(/^payment:manage:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery();
+    
+    const { getPaymentManagementKeyboard } = await import('./bot/ui.js');
+    
+    await ctx.editMessageText(
+      `📊 *إدارة مدفوعات ${wilaya}*\n\nاختر الإجراء المطلوب:`,
+      {
+        parse_mode: 'Markdown',
+        ...getPaymentManagementKeyboard(wilaya)
+      }
+    );
+  });
+
+  bot.action(/^payment:list:(.+)$/, async (ctx) => {
+    const wilaya = ctx.match[1];
+    await ctx.answerCbQuery(`جلب قائمة مدفوعات ${wilaya}...`);
+
+    try {
+      const paymentHistory = await getDistributorPaymentHistory(wilaya);
+      const { message, keyboard } = formatPaymentsList(paymentHistory, wilaya);
+      
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        ...keyboard
+      });
+    } catch (error) {
+      logger.error({ error, wilaya }, 'Failed to fetch payment list');
+      await ctx.answerCbQuery('❌ حدث خطأ في جلب قائمة المدفوعات');
+    }
+  });
+
+  bot.action(/^payment:select:(.+)$/, async (ctx) => {
+    const paymentId = ctx.match[1];
+    await ctx.answerCbQuery();
+    
+    // استخراج الولاية من معرف الدفعة
+    const wilaya = paymentId.split('-')[1]; // معرف الدفعة بصيغة PAYMENT-ولاية-تاريخ
+    
+    await ctx.editMessageText(
+      `✏️ *تعديل الدفعة*
+
+💰 معرف الدفعة: ${paymentId}
+📍 البلد: ${wilaya}
+
+اختر الإجراء:`,
+      {
+        parse_mode: 'Markdown',
+        ...getPaymentEditKeyboard(paymentId, wilaya)
+      }
+    );
+  });
+
+  bot.action(/^payment:edit:(.+)$/, async (ctx) => {
+    const paymentId = ctx.match[1];
+    await ctx.answerCbQuery();
+    
+    const wilaya = paymentId.split('-')[1];
+    
+    // حفظ معرف الدفعة والولاية في حالة المستخدم
+    let state = userStates.get(ctx.from.id);
+    if (!state) {
+      state = { step: 'awaiting_payment_edit', paymentIdForEdit: paymentId, wilayaForPayment: wilaya } as any;
+      userStates.set(ctx.from.id, state);
+    } else {
+      state.step = 'awaiting_payment_edit';
+      state.paymentIdForEdit = paymentId;
+      state.wilayaForPayment = wilaya;
+    }
+    
+    await ctx.editMessageText(
+      `✏️ *تعديل مبلغ الدفعة*\n\n` +
+      `💰 معرف الدفعة: ${paymentId}\n` +
+      `📍 البلد: ${wilaya}\n\n` +
+      `يرجى إدخال المبلغ الجديد (بالأرقام فقط):\n\n` +
+      `مثال: 7500`,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('❌ إلغاء', `payment:select:${paymentId}`)]
+        ])
+      }
+    );
+  });
+
+  bot.action(/^payment:delete:(.+)$/, async (ctx) => {
+    const paymentId = ctx.match[1];
+    const wilaya = paymentId.split('-')[1];
+    
+    await ctx.answerCbQuery(`حذف الدفعة ${paymentId}...`);
+
+    try {
+      await deletePaymentRecord(paymentId);
+      
+      await ctx.editMessageText(
+        `✅ *تم حذف الدفعة بنجاح*\n\n` +
+        `💰 معرف الدفعة: ${paymentId}\n` +
+        `📍 البلد: ${wilaya}\n` +
+        `📅 التاريخ: ${new Date().toLocaleDateString('ar-DZ')}`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ عودة للقائمة', `payment:list:${wilaya}`)]
+          ])
+        }
+      );
+    } catch (error) {
+      logger.error({ error, paymentId }, 'Failed to delete payment record');
+      await ctx.answerCbQuery('❌ حدث خطأ في حذف الدفعة');
     }
   });
 

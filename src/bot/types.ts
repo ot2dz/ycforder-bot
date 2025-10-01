@@ -13,7 +13,9 @@ export interface OrderState {
     | 'awaiting_amount_total'
     | 'awaiting_notes'
     | 'reviewing'
-    | 'submitting';
+    | 'submitting'
+    | 'awaiting_payment_amount' // حالة جديدة لتسجيل المدفوعات
+    | 'awaiting_payment_edit'; // حالة جديدة لتعديل المدفوعات
 
   telegramFileIds: string[];
   customerName?: string;
@@ -27,6 +29,8 @@ export interface OrderState {
   reviewMediaMessageIds?: number[];
   isEditing?: boolean; // حقل جديد لتتبع حالة التعديل
   cloudinaryPhotoData?: CloudinaryUploadResult[]; // لتخزين نتائج الرفع
+  wilayaForPayment?: string; // لحفظ اسم الولاية عند تسجيل مدفوعات
+  paymentIdForEdit?: string; // لحفظ معرف الدفعة عند التعديل
 }
 
 export const userStates = new Map<number, OrderState>();

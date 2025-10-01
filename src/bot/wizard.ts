@@ -1,6 +1,6 @@
-import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { Telegraf } from 'telegraf';
+import { Markup } from 'telegraf';
 import { logger } from '../lib/logger.js';
 import { userStates, type OrderState } from './types.js';
 import {
@@ -308,6 +308,98 @@ export async function handleTextInput(ctx: Context) {
         state.isEditing = false;
       }
       await showReview(ctx, state); // دائماً نذهب للمراجعة بعد الملاحظات
+      break;
+    case 'awaiting_payment_amount':
+      // معالجة إدخال مبلغ الدفعة من الموزع
+      if (!isValidAmount(text)) {
+        await ctx.reply('⚠️ المبلغ غير صالح. يرجى إدخال أرقام فقط:');
+        return;
+      }
+      
+      const amount = Number(text.replace(/\s+/g, ''));
+      const wilaya = state.wilayaForPayment!;
+      
+      try {
+        await ctx.reply('⏳ جارِ حفظ المدفوعة...');
+        
+        // حفظ عملية الدفع في قاعدة البيانات
+        const { recordDistributorPayment } = await import('../services/airtable.js');
+        await recordDistributorPayment(wilaya, amount, `تم التسجيل عبر البوت`);
+        
+        await ctx.reply(
+          `✅ **تم تسجيل المدفوعة بنجاح!**\n\n` +
+          `📍 البلد: ${wilaya}\n` +
+          `💰 المبلغ: ${amount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+          `📅 التاريخ: ${new Date().toLocaleDateString('ar-DZ')}`,
+          { parse_mode: 'Markdown' }
+        );
+        
+        // العودة إلى إحصائيات البلد المحدثة
+        const { getOrderStatisticsByWilaya, getTotalReceivedFromDistributor } = await import('../services/airtable.js');
+        const { getStatisticsActionsKeyboard, formatWilayaStatisticsReport } = await import('./ui.js');
+        
+        const stats = await getOrderStatisticsByWilaya(wilaya);
+        const totalReceived = await getTotalReceivedFromDistributor(wilaya);
+        const updatedReport = formatWilayaStatisticsReport(wilaya, stats, totalReceived);
+        
+        await ctx.reply(updatedReport, {
+          parse_mode: 'Markdown',
+          ...getStatisticsActionsKeyboard(wilaya)
+        });
+        
+      } catch (error) {
+        logger.error({ error, wilaya, amount }, 'Failed to record distributor payment');
+        await ctx.reply('❌ حدث خطأ أثناء حفظ المدفوعة. يرجى المحاولة مرة أخرى.');
+      } finally {
+        // تنظيف حالة المستخدم
+        userStates.delete(userId);
+      }
+      break;
+    case 'awaiting_payment_edit':
+      // معالجة تعديل مبلغ دفعة موجودة
+      if (!isValidAmount(text)) {
+        await ctx.reply('⚠️ المبلغ غير صالح. يرجى إدخال أرقام فقط:');
+        return;
+      }
+      
+      const newAmount = Number(text.replace(/\s+/g, ''));
+      const paymentId = state.paymentIdForEdit!;
+      const wilayaEdit = state.wilayaForPayment!;
+      
+      try {
+        await ctx.reply('⏳ جارِ تحديث المدفوعة...');
+        
+        // تحديث مبلغ الدفعة
+        const { updatePaymentRecord } = await import('../services/airtable.js');
+        await updatePaymentRecord(paymentId, newAmount, `تم التعديل عبر البوت`);
+        
+        await ctx.reply(
+          `✅ **تم تعديل المدفوعة بنجاح!**\n\n` +
+          `📍 البلد: ${wilayaEdit}\n` +
+          `💰 المبلغ الجديد: ${newAmount.toLocaleString('ar-DZ', { useGrouping: false })} د.ج\n` +
+          `📅 التاريخ: ${new Date().toLocaleDateString('ar-DZ')}`,
+          { parse_mode: 'Markdown' }
+        );
+        
+        // العودة إلى قائمة المدفوعات المحدثة
+        const { getDistributorPaymentHistory } = await import('../services/airtable.js');
+        const { formatPaymentsList } = await import('./ui.js');
+        
+        const paymentHistory = await getDistributorPaymentHistory(wilayaEdit);
+        const { message, keyboard } = formatPaymentsList(paymentHistory, wilayaEdit);
+        
+        await ctx.reply(message, {
+          parse_mode: 'Markdown',
+          ...keyboard
+        });
+        
+      } catch (error) {
+        logger.error({ error, paymentId, newAmount }, 'Failed to update payment record');
+        await ctx.reply('❌ حدث خطأ أثناء تعديل المدفوعة. يرجى المحاولة مرة أخرى.');
+      } finally {
+        // تنظيف حالة المستخدم
+        userStates.delete(userId);
+      }
       break;
     default:
       break;
